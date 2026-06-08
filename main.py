@@ -1,30 +1,44 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from typing import Optional
 
 app = FastAPI(
     title="Comprehensive Fuel Consumption Calculator API",
-    description="API with HTML UI for fuel efficiency calculation based on CC size."
+    description="API with an HTML UI supporting direct URL parameters and an extensive hard-coded vehicle database."
 )
 
-# Hard-coded CC Data Store
+# Hard-coded Vehicle CC and Fuel Efficiency Database (KM per Liter)
 cc_fuel_matrix = {
+    # --- Bikes & Three-Wheelers ---
     100: 55.0, 125: 48.0, 150: 40.0, 200: 35.0, 250: 30.0,
-    660: 20.0, 800: 18.0, 1000: 16.5, 1200: 15.0, 1300: 14.0,
-    1500: 12.0, 1600: 11.5, 1800: 11.0, 2000: 9.5, 2200: 9.0,
-    2400: 8.5, 2500: 8.0, 2700: 7.5, 3000: 7.0
+    # --- Small Cars & Hatchbacks ---
+    660: 20.0, 800: 18.0, 1000: 16.5,
+    # --- Sedans, SUVs & Vans ---
+    1200: 15.0, 1300: 14.0, 1500: 12.0, 1600: 11.5, 1800: 11.0,
+    2000: 9.5, 2200: 9.0, 2400: 8.5, 2500: 8.0, 2700: 7.5, 3000: 7.0
 }
 
+# Request Body Schema for the API POST Endpoint
 class CalculationRequest(BaseModel):
     cc: int
     km: float
 
-# --- 1. ලස්සන Web UI එකක් පෙන්වන Home Endpoint (GET) ---
+# --- 1. Clean HTML Web UI Endpoint (Accepts Optional URL Query Parameters) ---
 @app.get("/", response_class=HTMLResponse)
-def home_ui():
-    # Dropdown එකට දාන්න CC options ටික HTML විදිහට හදාගන්නවා
-    cc_options = "".join([f'<option value="{cc}">{cc} CC</option>' for cc in sorted(cc_fuel_matrix.keys())])
+def home_ui(cc: Optional[int] = None, km: Optional[float] = None):
+    # Dynamically generate HTML dropdown choices from our database keys
+    cc_options = ""
+    for available_cc in sorted(cc_fuel_matrix.keys()):
+        # If a matching CC was passed in the URL parameter, pre-select it
+        selected = "selected" if cc == available_cc else ""
+        cc_options += f'<option value="{available_cc}" {selected}>{available_cc} CC</option>'
     
+    # Pre-fill distance input if passed in the URL parameter, otherwise leave blank
+    km_value = km if km is not None else ""
+    # Flag to trigger immediate calculation if both URL parameters are provided
+    auto_calculate = "true" if (cc is not None and km is not None) else "false"
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -64,7 +78,7 @@ def home_ui():
             
             <div class="form-group">
                 <label for="km">Distance to Travel (KM)</label>
-                <input type="number" id="km" placeholder="e.g. 150" min="0" step="any">
+                <input type="number" id="km" value="{km_value}" placeholder="e.g. 150" min="0" step="any">
             </div>
             
             <button onclick="calculateFuel()">Calculate Liters</button>
@@ -91,7 +105,7 @@ def home_ui():
                 }}
                 
                 try {{
-                    // අපේම API endpoint එකට සාමාන්‍ය විදිහට POST request එකක් යවනවා
+                    // Fetch data dynamically from our backend endpoint
                     const response = await fetch('/calculate-fuel', {{
                         method: 'POST',
                         headers: {{ 'Content-Type': 'application/json' }},
@@ -111,20 +125,25 @@ def home_ui():
                     alert('Error connecting to the server');
                 }}
             }}
+
+            // Automatically execute computation if variables are parsed in the URL string
+            if ({auto_calculate}) {{
+                window.addEventListener('DOMContentLoaded', calculateFuel);
+            }}
         </script>
     </body>
     </html>
     """
     return HTMLResponse(content=html_content)
 
-# --- 2. Backend API Endpoint (POST) ---
+# --- 2. Backend API Endpoint (POST Method) ---
 @app.post("/calculate-fuel")
 def calculate_fuel(request: CalculationRequest):
     cc = request.cc
     km = request.km
     
     if cc not in cc_fuel_matrix:
-        raise HTTPException(status_code=404, detail="CC size not supported.")
+        raise HTTPException(status_code=404, detail="Engine CC size is not supported.")
     
     km_per_liter = cc_fuel_matrix[cc]
     required_liters = km / km_per_liter
