@@ -1,42 +1,75 @@
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI(
-    title="Comprehensive Fuel Consumption Calculator API",
-    description="API with an HTML UI supporting direct URL parameters and an extensive hard-coded vehicle database."
+    title="Smart Hybrid Fuel Consumption Calculator",
+    description="Returns an HTML UI for Browsers and direct JSON for Postman using the same root URL."
 )
 
 # Hard-coded Vehicle CC and Fuel Efficiency Database (KM per Liter)
 cc_fuel_matrix = {
-    # --- Bikes & Three-Wheelers ---
     100: 55.0, 125: 48.0, 150: 40.0, 200: 35.0, 250: 30.0,
-    # --- Small Cars & Hatchbacks ---
-    660: 20.0, 800: 18.0, 1000: 16.5,
-    # --- Sedans, SUVs & Vans ---
-    1200: 15.0, 1300: 14.0, 1500: 12.0, 1600: 11.5, 1800: 11.0,
-    2000: 9.5, 2200: 9.0, 2400: 8.5, 2500: 8.0, 2700: 7.5, 3000: 7.0
+    660: 20.0, 800: 18.0, 1000: 16.5, 1200: 15.0, 1300: 14.0,
+    1500: 12.0, 1600: 11.5, 1800: 11.0, 2000: 9.5, 2200: 9.0,
+    2400: 8.5, 2500: 8.0, 2700: 7.5, 3000: 7.0
 }
 
-# Request Body Schema for the API POST Endpoint
 class CalculationRequest(BaseModel):
     cc: int
     km: float
 
-# --- 1. Clean HTML Web UI Endpoint (Accepts Optional URL Query Parameters) ---
-@app.get("/", response_class=HTMLResponse)
-def home_ui(cc: Optional[int] = None, km: Optional[float] = None):
-    # Dynamically generate HTML dropdown choices from our database keys
+# Helper function to perform core math
+def calculate_fuel_logic(cc: int, km: float):
+    if cc not in cc_fuel_matrix:
+        raise HTTPException(status_code=404, detail=f"Engine CC size {cc} is not supported.")
+    km_per_liter = cc_fuel_matrix[cc]
+    required_liters = km / km_per_liter
+    return {
+        "requested_cc": cc,
+        "requested_km": km,
+        "km_per_liter_rate": km_per_liter,
+        "required_liters": round(required_liters, 2)
+    }
+
+@app.post("/calculate-fuel")
+def calculate_fuel(request: CalculationRequest):
+    cc = request.cc
+    km = request.km
+    
+    if cc not in cc_fuel_matrix:
+        raise HTTPException(status_code=404, detail="Engine CC size is not supported.")
+    
+    km_per_liter = cc_fuel_matrix[cc]
+    required_liters = km / km_per_liter
+    
+    return {
+        "requested_cc": cc,
+        "requested_km": km,
+        "km_per_liter_rate": km_per_liter,
+        "required_liters": round(required_liters, 2)
+    }
+
+# --- The Smart Root Endpoint ---
+@app.get("/")
+def home_router(request: Request, cc: Optional[int] = None, km: Optional[float] = None):
+    # 1. Check if the request is coming from Postman/API (Accepts JSON)
+    # Or if it's explicitly asking for a JSON structure via URL params
+    accept_header = request.headers.get("accept", "")
+    
+    if "application/json" in accept_header or (cc is not None and km is not None and "text/html" not in accept_header):
+        if cc is None or km is None:
+            return {"message": "Welcome! Please provide both ?cc= and ?km= parameters to calculate fuel via JSON."}
+        return calculate_fuel_logic(cc, km)
+
+    # 2. Otherwise, treat it as a Browser request and return the HTML UI
     cc_options = ""
     for available_cc in sorted(cc_fuel_matrix.keys()):
-        # If a matching CC was passed in the URL parameter, pre-select it
         selected = "selected" if cc == available_cc else ""
         cc_options += f'<option value="{available_cc}" {selected}>{available_cc} CC</option>'
     
-    # Pre-fill distance input if passed in the URL parameter, otherwise leave blank
     km_value = km if km is not None else ""
-    # Flag to trigger immediate calculation if both URL parameters are provided
     auto_calculate = "true" if (cc is not None and km is not None) else "false"
 
     html_content = f"""
@@ -105,13 +138,10 @@ def home_ui(cc: Optional[int] = None, km: Optional[float] = None):
                 }}
                 
                 try {{
-                    // Fetch data dynamically from our backend endpoint
-                    const response = await fetch('/calculate-fuel', {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ cc: parseInt(cc), km: parseFloat(km) }})
+                    // Fetch directly from the root with parameters to avoid multiple paths
+                    const response = await fetch(`/?cc=${{cc}}&km=${{km}}`, {{
+                        headers: {{ 'Accept': 'application/json' }}
                     }});
-                    
                     const data = await response.json();
                     
                     if(response.ok) {{
@@ -126,7 +156,6 @@ def home_ui(cc: Optional[int] = None, km: Optional[float] = None):
                 }}
             }}
 
-            // Automatically execute computation if variables are parsed in the URL string
             if ({auto_calculate}) {{
                 window.addEventListener('DOMContentLoaded', calculateFuel);
             }}
@@ -136,21 +165,3 @@ def home_ui(cc: Optional[int] = None, km: Optional[float] = None):
     """
     return HTMLResponse(content=html_content)
 
-# --- 2. Backend API Endpoint (POST Method) ---
-@app.post("/calculate-fuel")
-def calculate_fuel(request: CalculationRequest):
-    cc = request.cc
-    km = request.km
-    
-    if cc not in cc_fuel_matrix:
-        raise HTTPException(status_code=404, detail="Engine CC size is not supported.")
-    
-    km_per_liter = cc_fuel_matrix[cc]
-    required_liters = km / km_per_liter
-    
-    return {
-        "requested_cc": cc,
-        "requested_km": km,
-        "km_per_liter_rate": km_per_liter,
-        "required_liters": round(required_liters, 2)
-    }
